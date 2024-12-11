@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 package wafv2
+
 // **PLEASE DELETE THIS AND ALL TIP COMMENTS BEFORE SUBMITTING A PR FOR REVIEW!**
 //
 // TIP: ==== INTRODUCTION ====
@@ -33,19 +34,22 @@ import (
 	// need to import types and reference the nested types, e.g., as
 	// awstypes.<Type Name>.
 	"context"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/wafv2"
 	awstypes "github.com/aws/aws-sdk-go-v2/service/wafv2/types"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/service/wafv2"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+    "github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-provider-aws/internal/create"
 	"github.com/hashicorp/terraform-provider-aws/internal/framework"
 	"github.com/hashicorp/terraform-provider-aws/internal/framework/flex"
-	fwtypes "github.com/hashicorp/terraform-provider-aws/internal/framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
+	 fwtypes "github.com/hashicorp/terraform-provider-aws/internal/framework/types"
 	"github.com/hashicorp/terraform-provider-aws/names"
 )
 
@@ -102,36 +106,53 @@ func (d *dataSourceManagedRuleGroup) Metadata(_ context.Context, req datasource.
 // https://developer.hashicorp.com/terraform/plugin/framework/handling-data/schemas?page=schemas
 func (d *dataSourceManagedRuleGroup) Schema(ctx context.Context, req datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		Description: "Data for Vendor Maintained ManagedRuleGroups",
 		Attributes: map[string]schema.Attribute{
-			"arn": framework.ARNAttributeComputedOnly(),
-			"description": schema.StringAttribute{
-				Computed: true,
-			},
-			"id": framework.IDAttribute(),
-			"name": schema.StringAttribute{
+			"vendor_name": schema.StringAttribute{
 				Required: true,
 			},
-			"type": schema.StringAttribute{
+			names.AttrName: schema.StringAttribute{
+				Required: true,
+			},
+			names.AttrScope: schema.StringAttribute{
+				Required: true,
+				Validators: []validator.String{
+					stringvalidator.OneOf(
+						string(awstypes.ScopeCloudfront),
+						string(awstypes.ScopeRegional),
+					),
+				},
+			},
+			names.AttrSNSTopicARN: framework.ARNAttributeComputedOnly(),
+			// names.AttrDescription: schema.StringAttribute{
+			// 	Computed: true,
+			// },
+			names.AttrVersion: schema.StringAttribute{
+				Optional: true,
+			},
+			"capacity": schema.NumberAttribute{
 				Computed: true,
 			},
-		},
-		Blocks: map[string]schema.Block{
-			"complex_argument": schema.ListNestedBlock{
-				// TIP: ==== CUSTOM TYPES ====
-				// Use a custom type to identify the model type of the tested object
-				CustomType: fwtypes.NewListNestedObjectTypeOf[complexArgumentModel](ctx),
-				NestedObject: schema.NestedBlockObject{
-					Attributes: map[string]schema.Attribute{
-						// TIP: Attributes that are required on a corresponding resource will be 
-						// computed on the data source (unless required as part of the search criteria).
-						"nested_required": schema.StringAttribute{
-							Computed: true,
-						},
-						"nested_computed": schema.StringAttribute{
-							Computed: true,
-						},
-					},
-				},
+			// "versioning_supported": schema.BoolAttribute{
+			// 	Computed: true,
+			// },
+			"rules": schema.ListAttribute{
+				CustomType: fwtypes.NewListNestedObjectTypeOf[RuleSummaryModel](ctx),
+				ElementType: fwtypes.NewObjectTypeOf[RuleSummaryModel](ctx),
+				Computed: true,
+			},
+			"available_labels": schema.ListAttribute{
+				CustomType: fwtypes.NewListNestedObjectTypeOf[LabelModel](ctx),
+				ElementType: fwtypes.NewObjectTypeOf[LabelModel](ctx),
+				Computed: true,
+			},
+			"versions": schema.ListAttribute{
+				CustomType: fwtypes.NewListNestedObjectTypeOf[ManagedRuleGroupVersionModel](ctx),
+				ElementType: fwtypes.NewObjectTypeOf[ManagedRuleGroupVersionModel](ctx),
+				Computed: true,
+			},
+			"current_default_version": schema.StringAttribute{
+				Computed: true,
 			},
 		},
 	}
@@ -151,19 +172,27 @@ func (d *dataSourceManagedRuleGroup) Read(ctx context.Context, req datasource.Re
 	// 6. Set the state
 	// TIP: -- 1. Get a client connection to the relevant service
 	conn := d.Meta().WAFV2Client(ctx)
-	
+
 	// TIP: -- 2. Fetch the config
 	var data dataSourceManagedRuleGroupModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	
+
 	// TIP: -- 3. Get information about a resource from AWS
-	out, err := findManagedRuleGroupByName(ctx, conn, data.Name.ValueString())
+	version := data.Version.ValueString()
+	if data.Version.IsNull() {
+		version = ""
+	}
+	out, err := describeManagedRuleGroup(ctx, conn, data.Name.ValueString(), data.Scope.ValueString(), data.VendorName.ValueString(), version)
 	if err != nil {
 		resp.Diagnostics.AddError(
-			create.ProblemStandardMessage(names.WAFV2, create.ErrActionReading, DSNameManagedRuleGroup, data.Name.String(), err),
+			create.ProblemStandardMessage(names.WAFV2, 
+				create.ErrActionReading, 
+				DSNameManagedRuleGroup, 
+				strings.Join([]string{data.Scope.ValueString(), data.VendorName.ValueString(), data.Name.ValueString(), version},":"), 
+				err),
 			err.Error(),
 		)
 		return
@@ -171,10 +200,25 @@ func (d *dataSourceManagedRuleGroup) Read(ctx context.Context, req datasource.Re
 
 	// TIP: -- 4. Set the ID, arguments, and attributes
 	// Using a field name prefix allows mapping fields such as `ManagedRuleGroupId` to `ID`
-	resp.Diagnostics.Append(flex.Flatten(ctx, out, &data, flex.WithFieldNamePrefix("ManagedRuleGroup"))...)
+	resp.Diagnostics.Append(flex.Flatten(ctx, out, &data)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	
+	outVer, err := listAvailableManagedRuleGroupVersions(ctx, conn, data.Name.ValueString(), data.Scope.ValueString(), data.VendorName.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError(
+			create.ProblemStandardMessage(names.WAFV2, 
+				create.ErrActionReading, 
+				DSNameManagedRuleGroup, 
+				strings.Join([]string{data.Scope.ValueString(), data.VendorName.ValueString(), data.Name.ValueString()},":"), 
+				err),
+			err.Error(),
+		)
+		return
+	}
+
+	resp.Diagnostics.Append(flex.Flatten(ctx, outVer, &data)...)
 
 	// TIP: -- 5. Set the tags
 
@@ -187,24 +231,108 @@ func (d *dataSourceManagedRuleGroup) Read(ctx context.Context, req datasource.Re
 // With Terraform Plugin-Framework configurations are deserialized into
 // Go types, providing type safety without the need for type assertions.
 // These structs should match the schema definition exactly, and the `tfsdk`
-// tag value should match the attribute name. 
+// tag value should match the attribute name.
 //
-// Nested objects are represented in their own data struct. These will 
+// Nested objects are represented in their own data struct. These will
 // also have a corresponding attribute type mapping for use inside flex
 // functions.
 //
 // See more:
 // https://developer.hashicorp.com/terraform/plugin/framework/handling-data/accessing-values
 type dataSourceManagedRuleGroupModel struct {
-	ARN             types.String                                          `tfsdk:"arn"`
-	ComplexArgument fwtypes.ListNestedObjectValueOf[complexArgumentModel] `tfsdk:"complex_argument"`
-	Description     types.String                                          `tfsdk:"description"`
-	ID              types.String                                          `tfsdk:"id"`
-	Name            types.String                                          `tfsdk:"name"`
-	Type            types.String                                          `tfsdk:"type"`
+	VendorName				types.String														`tfsdk:"vendor_name"`
+	Name 					types.String														`tfsdk:"name"`
+	Scope					types.String														`tfsdk:"scope"`
+	SNSTopicArn 			types.String														`tfsdk:"sns_topic_arn"`
+	// Description 			types.String														`tfsdk:"description"`
+	Version 				types.String														`tfsdk:"version"`
+	Capactity   			types.Number														`tfsdk:"capacity"`
+	// VersioningSupported		types.Bool															`tfsdk:"versioning_supported"`
+	Rules               	fwtypes.ListNestedObjectValueOf[RuleSummaryModel]				`tfsdk:"rules"`
+	AvailableLabels			fwtypes.ListNestedObjectValueOf[LabelModel]							`tfsdk:"available_labels"`
+	Versions				fwtypes.ListNestedObjectValueOf[ManagedRuleGroupVersionModel]			`tfsdk:"versions"`
+	CurrentDefaultVersion	types.String														`tfsdk:"current_default_version"`
 }
 
-type complexArgumentModel struct {
-	NestedRequired types.String `tfsdk:"nested_required"`
-	NestedOptional types.String `tfsdk:"nested_optional"`
+func describeManagedRuleGroup(ctx context.Context, conn *wafv2.Client, name string, scope string, vendor string, version string) (*wafv2.DescribeManagedRuleGroupOutput, error){
+	input := &wafv2.DescribeManagedRuleGroupInput{
+		Name: aws.String(name),
+		VendorName: aws.String(vendor),
+		Scope: awstypes.Scope(scope),
+	}
+
+	if version != "" {
+		input.VersionName = aws.String(version)
+	}
+
+	return conn.DescribeManagedRuleGroup(ctx, input)
+}
+
+func listAvailableManagedRuleGroupVersions(ctx context.Context, conn *wafv2.Client, name string, scope string, vendor string) (*wafv2.ListAvailableManagedRuleGroupVersionsOutput, error){
+	input := &wafv2.ListAvailableManagedRuleGroupVersionsInput{
+		Name: aws.String(name),
+		VendorName: aws.String(vendor),
+		Scope: awstypes.Scope(scope),
+	}
+
+	return conn.ListAvailableManagedRuleGroupVersions(ctx, input)
+}
+
+type ManagedRuleGroupVersionModel struct{
+	Name				types.String		`tfsdk:"name"`
+	LastUpdateTimeStamp types.String		`tfsdk:"last_update_timestamp"`
+}
+
+func (m *ManagedRuleGroupVersionModel) Flatten(ctx context.Context, v any) diag.Diagnostics {
+    var diags diag.Diagnostics
+    
+    version := v.(awstypes.ManagedRuleGroupVersion)
+    m.Name = types.StringPointerValue(version.Name)
+
+    if version.LastUpdateTimestamp != nil {
+        // Convert time.Time to RFC3339 string format
+        m.LastUpdateTimeStamp = types.StringValue(version.LastUpdateTimestamp.Format(time.RFC3339))
+    } else {
+        m.LastUpdateTimeStamp = types.StringNull()
+    }
+
+    return diags
+}
+
+
+type LabelModel struct{
+	Name				types.String		`tfsdk:"name"`
+}
+
+type RuleSummaryModel struct{
+	Name	types.String	`tfsdk:"name"`
+	// only care about action type
+	Action	types.String	`tfsdk:"action"`
+}
+
+func (m *RuleSummaryModel) Flatten(ctx context.Context, v any) diag.Diagnostics {
+    var diags diag.Diagnostics
+    
+    rs := v.(awstypes.RuleSummary)
+    m.Name = types.StringPointerValue(rs.Name)
+
+    // Determine action type based on which field is present
+    if rs.Action != nil {
+        switch {
+        case rs.Action.Block != nil:
+            m.Action = types.StringValue("BLOCK")
+        case rs.Action.Allow != nil:
+            m.Action = types.StringValue("ALLOW")
+        case rs.Action.Count != nil:
+            m.Action = types.StringValue("COUNT")
+        case rs.Action.Captcha != nil:
+            m.Action = types.StringValue("CAPTCHA")
+        case rs.Action.Challenge != nil:
+            m.Action = types.StringValue("CHALLENGE")
+        }
+    } else {
+        m.Action = types.StringNull()
+    }
+
+    return diags
 }

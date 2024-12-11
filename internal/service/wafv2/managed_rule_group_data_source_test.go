@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 package wafv2_test
+
 // **PLEASE DELETE THIS AND ALL TIP COMMENTS BEFORE SUBMITTING A PR FOR REVIEW!**
 //
 // TIP: ==== INTRODUCTION ====
@@ -33,26 +34,15 @@ import (
 	// need to import types and reference the nested types, e.g., as
 	// types.<Type Name>.
 	"fmt"
-	"strings"
 	"testing"
 
-	"github.com/YakDriver/regexache"
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/wafv2"
-	"github.com/aws/aws-sdk-go-v2/service/wafv2/types"
-	"github.com/hashicorp/aws-sdk-go-base/v2/awsv1shim/v2/tfawserr"
-	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
-	sdkacctest "github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
-	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-aws/internal/acctest"
-	"github.com/hashicorp/terraform-provider-aws/internal/conns"
-	"github.com/hashicorp/terraform-provider-aws/internal/create"
 
 	// TIP: You will often need to import the package that this test file lives
-    // in. Since it is in the "test" context, it must import the package to use
-    // any normal context constants, variables, or functions.
-	tfwafv2 "github.com/hashicorp/terraform-provider-aws/internal/service/wafv2"
+	// in. Since it is in the "test" context, it must import the package to use
+	// any normal context constants, variables, or functions.
+
 	"github.com/hashicorp/terraform-provider-aws/names"
 )
 
@@ -69,7 +59,6 @@ import (
 // 7. Helper functions (exists, destroy, check, etc.)
 // 8. Functions that return Terraform configurations
 
-
 // TIP: ==== UNIT TESTS ====
 // This is an example of a unit test. Its name is not prefixed with
 // "TestAcc" like an acceptance test.
@@ -84,55 +73,54 @@ import (
 // Cut and dry functions using well-used patterns, like typical flatteners and
 // expanders, don't need unit testing. However, if they are complex or
 // intricate, they should be unit tested.
-func TestManagedRuleGroupExampleUnitTest(t *testing.T) {
-	t.Parallel()
+// func TestManagedRuleGroupExampleUnitTest(t *testing.T) {
+// 	t.Parallel()
 
-	testCases := []struct {
-		TestName string
-		Input    string
-		Expected string
-		Error    bool
-	}{
-		{
-			TestName: "empty",
-			Input:    "",
-			Expected: "",
-			Error:    true,
-		},
-		{
-			TestName: "descriptive name",
-			Input:    "some input",
-			Expected: "some output",
-			Error:    false,
-		},
-		{
-			TestName: "another descriptive name",
-			Input:    "more input",
-			Expected: "more output",
-			Error:    false,
-		},
-	}
+// 	testCases := []struct {
+// 		TestName string
+// 		Input    string
+// 		Expected string
+// 		Error    bool
+// 	}{
+// 		{
+// 			TestName: "empty",
+// 			Input:    "",
+// 			Expected: "",
+// 			Error:    true,
+// 		},
+// 		{
+// 			TestName: "descriptive name",
+// 			Input:    "some input",
+// 			Expected: "some output",
+// 			Error:    false,
+// 		},
+// 		{
+// 			TestName: "another descriptive name",
+// 			Input:    "more input",
+// 			Expected: "more output",
+// 			Error:    false,
+// 		},
+// 	}
 
-	for _, testCase := range testCases {
-		t.Run(testCase.TestName, func(t *testing.T) {
-			t.Parallel()
-			got, err := tfwafv2.FunctionFromDataSource(testCase.Input)
+// 	for _, testCase := range testCases {
+// 		t.Run(testCase.TestName, func(t *testing.T) {
+// 			t.Parallel()
+// 			got, err := tfwafv2.FunctionFromDataSource(testCase.Input)
 
-			if err != nil && !testCase.Error {
-				t.Errorf("got error (%s), expected no error", err)
-			}
+// 			if err != nil && !testCase.Error {
+// 				t.Errorf("got error (%s), expected no error", err)
+// 			}
 
-			if err == nil && testCase.Error {
-				t.Errorf("got (%s) and no error, expected error", got)
-			}
+// 			if err == nil && testCase.Error {
+// 				t.Errorf("got (%s) and no error, expected error", got)
+// 			}
 
-			if got != testCase.Expected {
-				t.Errorf("got %s, expected %s", got, testCase.Expected)
-			}
-		})
-	}
-}
-
+// 			if got != testCase.Expected {
+// 				t.Errorf("got %s, expected %s", got, testCase.Expected)
+// 			}
+// 		})
+// 	}
+// }
 
 // TIP: ==== ACCEPTANCE TESTS ====
 // This is an example of a basic acceptance test. This should test as much of
@@ -143,68 +131,39 @@ func TestManagedRuleGroupExampleUnitTest(t *testing.T) {
 // Acceptance test access AWS and cost money to run.
 func TestAccWAFV2ManagedRuleGroupDataSource_basic(t *testing.T) {
 	ctx := acctest.Context(t)
-    // TIP: This is a long-running test guard for tests that run longer than
-    // 300s (5 min) generally.
+	// TIP: This is a long-running test guard for tests that run longer than
+	// 300s (5 min) generally.
 	if testing.Short() {
 		t.Skip("skipping long-running test in short mode")
 	}
 
-	var managedrulegroup wafv2.DescribeManagedRuleGroupResponse
-	rName := sdkacctest.RandomWithPrefix(acctest.ResourcePrefix)
+	rName := "AWSManagedRulesCommonRuleSet"
 	dataSourceName := "data.aws_wafv2_managed_rule_group.test"
 
 	resource.ParallelTest(t, resource.TestCase{
 		PreCheck: func() {
 			acctest.PreCheck(ctx, t)
-			acctest.PreCheckPartitionHasService(t, names.WAFV2EndpointID)
-			testAccPreCheck(ctx, t)
+			acctest.PreCheckPartitionHasService(t, names.WAFV2)
 		},
 		ErrorCheck:               acctest.ErrorCheck(t, names.WAFV2ServiceID),
 		ProtoV5ProviderFactories: acctest.ProtoV5ProviderFactories,
-		CheckDestroy:             testAccCheckManagedRuleGroupDestroy(ctx),
 		Steps: []resource.TestStep{
 			{
 				Config: testAccManagedRuleGroupDataSourceConfig_basic(rName),
 				Check: resource.ComposeTestCheckFunc(
-					testAccCheckManagedRuleGroupExists(ctx, dataSourceName, &managedrulegroup),
-					resource.TestCheckResourceAttr(dataSourceName, "auto_minor_version_upgrade", "false"),
-					resource.TestCheckResourceAttrSet(dataSourceName, "maintenance_window_start_time.0.day_of_week"),
-					resource.TestCheckTypeSetElemNestedAttrs(dataSourceName, "user.*", map[string]string{
-						"console_access": "false",
-						"groups.#":       "0",
-						"username":       "Test",
-						"password":       "TestTest1234",
-					}),
-					acctest.MatchResourceAttrRegionalARN(dataSourceName, "arn", "wafv2", regexache.MustCompile(`managedrulegroup:+.`)),
+					resource.TestCheckResourceAttr(dataSourceName, "current_default_version", "Version_1.15"),
 				),
 			},
 		},
 	})
 }
 
-func testAccManagedRuleGroupDataSourceConfig_basic(rName, version string) string {
+func testAccManagedRuleGroupDataSourceConfig_basic(name string) string {
 	return fmt.Sprintf(`
-data "aws_security_group" "test" {
-  name = %[1]q
-}
-
 data "aws_wafv2_managed_rule_group" "test" {
-  managed_rule_group_name             = %[1]q
-  engine_type             = "ActiveWAFV2"
-  engine_version          = %[2]q
-  host_instance_type      = "wafv2.t2.micro"
-  security_groups         = [aws_security_group.test.id]
-  authentication_strategy = "simple"
-  storage_type            = "efs"
-
-  logs {
-    general = true
-  }
-
-  user {
-    username = "Test"
-    password = "TestTest1234"
-  }
+  name             		  = "%s"
+  vendor_name             = "AWS"
+  scope					  = "REGIONAL"
 }
-`, rName, version)
+`, name)
 }
