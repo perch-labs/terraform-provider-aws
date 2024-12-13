@@ -34,9 +34,12 @@ import (
 	// need to import types and reference the nested types, e.g., as
 	// types.<Type Name>.
 	"fmt"
+	"regexp"
+	"strconv"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
+	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-provider-aws/internal/acctest"
 
 	// TIP: You will often need to import the package that this test file lives
@@ -131,11 +134,6 @@ import (
 // Acceptance test access AWS and cost money to run.
 func TestAccWAFV2ManagedRuleGroupDataSource_basic(t *testing.T) {
 	ctx := acctest.Context(t)
-	// TIP: This is a long-running test guard for tests that run longer than
-	// 300s (5 min) generally.
-	if testing.Short() {
-		t.Skip("skipping long-running test in short mode")
-	}
 
 	rName := "AWSManagedRulesCommonRuleSet"
 	dataSourceName := "data.aws_wafv2_managed_rule_group.test"
@@ -151,11 +149,46 @@ func TestAccWAFV2ManagedRuleGroupDataSource_basic(t *testing.T) {
 			{
 				Config: testAccManagedRuleGroupDataSourceConfig_basic(rName),
 				Check: resource.ComposeTestCheckFunc(
-					resource.TestCheckResourceAttr(dataSourceName, "current_default_version", "Version_1.15"),
+					resource.TestCheckResourceAttrSet(dataSourceName, "versions.#"),
+					resource.TestCheckResourceAttrSet(dataSourceName, "rules.#"),
+					testAccCheckDefaultVersionInVersionsList(dataSourceName),
+					resource.TestMatchResourceAttr(dataSourceName, "capacity", regexp.MustCompile(`^[1-9]\d*$`)),
 				),
 			},
 		},
 	})
+}
+
+func testAccCheckDefaultVersionInVersionsList(dataSourceName string) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[dataSourceName]
+		if !ok {
+			return fmt.Errorf("resource %s not found", dataSourceName)
+		}
+
+		currentDefaultVersion := rs.Primary.Attributes["current_default_version"]
+		if currentDefaultVersion == "" {
+			return fmt.Errorf("current_default_version is empty")
+		}
+
+		// Get the number of versions
+		versionCount, err := strconv.Atoi(rs.Primary.Attributes["versions.#"])
+		if err != nil {
+			return fmt.Errorf("error converting versions.# to int: %s", err)
+		}
+
+		// Check if current_default_version exists in the versions list
+		for i := 0; i < versionCount; i++ {
+			versionNameAttr := fmt.Sprintf("versions.%d.name", i)
+			if versionName, ok := rs.Primary.Attributes[versionNameAttr]; ok {
+				if versionName == currentDefaultVersion {
+					return nil // Found the version
+				}
+			}
+		}
+
+		return fmt.Errorf("current_default_version %s not found in versions list", currentDefaultVersion)
+	}
 }
 
 func testAccManagedRuleGroupDataSourceConfig_basic(name string) string {
